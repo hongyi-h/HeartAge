@@ -1,10 +1,12 @@
 """Block 1 configuration: paths, field mappings, hyperparameters."""
 
+import os
 from pathlib import Path
 
 # --- Paths ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "UKB"
+DATA_DIR = Path(os.environ.get("HEARTAGE_DATA_DIR",
+                               PROJECT_ROOT / "data" / "UKB"))
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 RESULTS_DIR = PROJECT_ROOT / "results" / "block1"
 MODELS_DIR = RESULTS_DIR / "models"
