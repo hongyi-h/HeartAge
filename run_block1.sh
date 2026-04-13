@@ -15,7 +15,7 @@ echo ""
 echo "==== Step 3: Bootstrap stability (optional, slow) ===="
 echo "To run: python -m src.block1.bootstrap --n_bootstrap 50 --device cpu"
 echo "Skipping by default. Uncomment the next line to run."
-# python -m src.block1.bootstrap --n_bootstrap 50 --device cpu
+python -m src.block1.bootstrap --n_bootstrap 50 --device cpu
 
 echo ""
 echo "==== Done ===="
