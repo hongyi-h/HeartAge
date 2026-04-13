@@ -18,6 +18,14 @@ import gc
 import numpy as np
 import pandas as pd
 import torch
+
+
+def _to_np(t: torch.Tensor) -> np.ndarray:
+    """Convert tensor to numpy, works even when numpy C bridge is broken."""
+    try:
+        return t.detach().cpu().numpy()
+    except RuntimeError:
+        return np.array(t.detach().cpu().tolist(), dtype=np.float32)
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.block1.config import (
@@ -123,7 +131,7 @@ def main():
 
         # Resample training indices with replacement
         rng = np.random.RandomState(TRAIN_CFG["seed"] + b)
-        boot_idx = torch.from_numpy(
+        boot_idx = torch.as_tensor(
             rng.randint(0, n_train, size=n_train)).long()
 
         idps_boot = idps_tr_full[boot_idx]
@@ -139,7 +147,7 @@ def main():
 
         with torch.no_grad():
             _, _, _, sa_test = model(idps_te, nf_te)
-            struct_ages[b] = sa_test.cpu().numpy()
+            struct_ages[b] = _to_np(sa_test)
 
         del model
         gc.collect()

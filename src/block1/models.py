@@ -174,9 +174,14 @@ class BaselineBMLP(nn.Module):
 
 def loss_norm(z: torch.Tensor, mu: torch.Tensor,
               log_var: torch.Tensor) -> torch.Tensor:
-    """Gaussian NLL: healthy latents should lie near μ(age,sex)."""
-    var = log_var.exp().clamp(min=1e-6)
-    return 0.5 * (log_var + (z - mu) ** 2 / var).mean()
+    """Gaussian NLL: normative head learns to describe encoder output.
+    z is detached so L_norm gradients only flow to the normative head,
+    preventing the encoder from collapsing z onto μ.
+    log_var is clamped to [-5, 5] to bound σ²."""
+    z_sg = z.detach()  # stop-gradient: encoder is NOT trained by L_norm
+    log_var = log_var.clamp(-5, 5)
+    var = log_var.exp()
+    return 0.5 * (log_var + (z_sg - mu) ** 2 / var).mean()
 
 
 def loss_age(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -211,15 +216,18 @@ def compute_deviation(z: torch.Tensor, mu: torch.Tensor,
                       log_var: torch.Tensor) -> torch.Tensor:
     """Per-sample deviation from manifold (scalar).
     deviation = sqrt(mean_k((z_k - μ_k)² / σ²_k))
+    log_var clamped to match training constraint.
     """
-    var = log_var.exp().clamp(min=1e-6)
+    log_var = log_var.clamp(-5, 5)
+    var = log_var.exp()
     return ((z - mu) ** 2 / var).mean(dim=1).sqrt()
 
 
 def compute_domain_scores(z: torch.Tensor, mu: torch.Tensor,
                           log_var: torch.Tensor) -> dict[str, torch.Tensor]:
     """Per-domain deviation scores."""
-    var = log_var.exp().clamp(min=1e-6)
+    log_var = log_var.clamp(-5, 5)
+    var = log_var.exp()
     scores = {}
     offset = 0
     for dname, dinfo in IDP_DOMAINS.items():

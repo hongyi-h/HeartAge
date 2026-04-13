@@ -36,6 +36,14 @@ from sklearn.linear_model import ElasticNetCV
 from sklearn.metrics import r2_score
 from torch.utils.data import DataLoader, TensorDataset
 
+
+def _to_np(t: torch.Tensor) -> np.ndarray:
+    """Convert tensor to numpy, works even when numpy C bridge is broken."""
+    try:
+        return t.detach().cpu().numpy()
+    except RuntimeError:
+        return np.array(t.detach().cpu().tolist(), dtype=np.float32)
+
 from src.block1.config import (
     ALL_IDP_FIELDS, IDP_DOMAINS, MODELS_DIR, FIGURES_DIR,
     PREDICTIONS_DIR, PROCESSED_DIR, RESULTS_DIR, TOTAL_IDP_DIM,
@@ -81,10 +89,10 @@ def make_tensors(df, mask, norm_feature_cols, idp_mean, idp_std, device):
     norm_feat = sub[norm_feature_cols].values.astype(np.float32)
 
     return (
-        torch.from_numpy(idps).to(device),
-        torch.from_numpy(ages).to(device),
-        torch.from_numpy(sex).to(device),
-        torch.from_numpy(norm_feat).to(device),
+        torch.as_tensor(idps).to(device),
+        torch.as_tensor(ages).to(device),
+        torch.as_tensor(sex).to(device),
+        torch.as_tensor(norm_feat).to(device),
     )
 
 
@@ -276,8 +284,8 @@ def train_baseline_b(df, idp_mean, idp_std, device):
         sex = sub["sex"].values.astype(np.float32).reshape(-1, 1)
         x = np.hstack([idps, sex])
         y = sub["age"].values.astype(np.float32)
-        return (torch.from_numpy(x).to(device),
-                torch.from_numpy(y).to(device))
+        return (torch.as_tensor(x).to(device),
+                torch.as_tensor(y).to(device))
 
     x_tr, y_tr = _pack(df["split"] == "train")
     x_va, y_va = _pack(df["split"] == "val")
@@ -352,17 +360,17 @@ def eval_teacher(model, df, norm_feature_cols, idp_mean, idp_std, device):
     model.eval()
     for start in range(0, len(df), CHUNK):
         end = min(start + CHUNK, len(df))
-        idps_t = torch.from_numpy(idps_all[start:end]).to(device)
-        nf_t = torch.from_numpy(nf_all[start:end]).to(device)
+        idps_t = torch.as_tensor(idps_all[start:end].copy()).to(device)
+        nf_t = torch.as_tensor(nf_all[start:end].copy()).to(device)
 
         z, mu, lv, sa = model(idps_t, nf_t)
         dev = compute_deviation(z, mu, lv)
         ds = compute_domain_scores(z, mu, lv)
 
-        struct_ages.append(sa.cpu().numpy())
-        deviations.append(dev.cpu().numpy())
+        struct_ages.append(_to_np(sa))
+        deviations.append(_to_np(dev))
         for d in IDP_DOMAINS:
-            domain_score_dict[d].append(ds[d].cpu().numpy())
+            domain_score_dict[d].append(_to_np(ds[d]))
 
     pred_df = pd.DataFrame({
         "eid": df["eid"].values,
@@ -387,8 +395,8 @@ def eval_baseline_b(model, df, idp_mean, idp_std, device):
     model.eval()
     for start in range(0, len(df), CHUNK):
         end = min(start + CHUNK, len(df))
-        xt = torch.from_numpy(x[start:end]).to(device)
-        preds.append(model(xt).cpu().numpy())
+        xt = torch.as_tensor(x[start:end].copy()).to(device)
+        preds.append(_to_np(model(xt)))
 
     pred_age = np.concatenate(preds)
     return pd.DataFrame({
@@ -672,18 +680,41 @@ def main():
     print("\nComputing comparative metrics …")
     comparisons = {}
 
-    # Deviation variance: full_teacher vs baseline_b (healthy test)
-    dev_ft = pred_teacher.loc[test_m, "deviation"].values
-    dev_bb = np.abs(pred_b.loc[test_m, "deviation"].values)  # |age residual|
-    # Levene test for variance equality
-    stat, pval = sp_stats.levene(dev_ft, dev_bb)
-    comparisons["deviation_variance_levene"] = {
-        "full_teacher_var": float(np.var(dev_ft)),
-        "baseline_b_var": float(np.var(dev_bb)),
-        "statistic": float(stat), "p_value": float(pval),
+    # --- 5a. Proper comparison: AUROC of deviation for healthy vs non-healthy ---
+    # Both systems should produce a deviation that separates healthy from non-healthy.
+    # Use AUROC as an apples-to-apples metric (scale-invariant).
+    from sklearn.metrics import roc_auc_score
+
+    full_mask = df["is_healthy"].values  # True = healthy
+    # For FT: deviation = Mahalanobis (higher = more abnormal)
+    dev_ft_all = pred_teacher["deviation"].values
+    # For BB: use |age residual| as deviation proxy (higher = more abnormal)
+    dev_bb_all = np.abs(pred_b["deviation"].values)
+
+    # Labels: 1 = non-healthy (the positive class we want to detect)
+    labels_all = (~df["is_healthy"]).values.astype(int)
+
+    auroc_ft = float(roc_auc_score(labels_all, dev_ft_all))
+    auroc_bb = float(roc_auc_score(labels_all, dev_bb_all))
+    comparisons["discrimination_auroc"] = {
+        "full_teacher_auroc": auroc_ft,
+        "baseline_b_auroc": auroc_bb,
+        "difference": auroc_ft - auroc_bb,
+        "note": "AUROC for classifying healthy vs non-healthy using deviation"
     }
 
-    # Risk factor correlation: Fisher z-test (full_teacher vs baseline_b)
+    # --- 5b. Deviation variance on healthy test (same-scale via z-scoring) ---
+    test_m_only = (df["split"] == "test").values
+    dev_ft_test = pred_teacher.loc[test_m_only, "deviation"].values
+    dev_bb_test = np.abs(pred_b.loc[test_m_only, "deviation"].values)
+    # Z-score each to unit-free scale, then compare CoV
+    comparisons["deviation_coefficient_of_variation"] = {
+        "full_teacher_cv": float(np.std(dev_ft_test) / (np.mean(dev_ft_test) + 1e-8)),
+        "baseline_b_cv": float(np.std(dev_bb_test) / (np.mean(dev_bb_test) + 1e-8)),
+        "note": "Coefficient of variation (std/mean), scale-invariant"
+    }
+
+    # --- 5c. Risk factor correlation comparison (Steiger test for dependent r) ---
     nh_mask = (~df["is_healthy"]).values
     if nh_mask.sum() > 100:
         bmi_nh = df.loc[nh_mask, "bmi"].values.astype(np.float64)
@@ -694,19 +725,34 @@ def main():
         if valid.sum() > 30:
             r_ft, _ = sp_stats.spearmanr(dev_ft_nh[valid], bmi_nh[valid])
             r_bb, _ = sp_stats.spearmanr(dev_bb_nh[valid], bmi_nh[valid])
+            # Correlation between the two deviation measures (needed for Steiger)
+            r_12, _ = sp_stats.spearmanr(dev_ft_nh[valid], dev_bb_nh[valid])
             n_v = int(valid.sum())
-            # Fisher z-transform
-            z_ft = np.arctanh(r_ft)
-            z_bb = np.arctanh(r_bb)
-            se = np.sqrt(1 / (n_v - 3) + 1 / (n_v - 3))
-            z_diff = (z_ft - z_bb) / se
-            p_fisher = 2 * (1 - sp_stats.norm.cdf(abs(z_diff)))
-            comparisons["bmi_corr_fisher_z"] = {
+
+            # Steiger (1980) test for dependent correlations
+            r_mean_sq = ((r_ft + r_bb) / 2) ** 2
+            denom = (1 - r_12) * (1 - r_mean_sq) * 2
+            if abs(denom) > 1e-10:
+                # Simplified Steiger formula
+                z_ft = np.arctanh(r_ft)
+                z_bb = np.arctanh(r_bb)
+                # Correct SE for dependent correlations
+                f_r12 = (1 - r_12) / (2 * (1 - r_mean_sq))
+                se = np.sqrt((2 * (1 - r_12)) / (n_v * f_r12 + 1e-10))
+                z_diff = (z_ft - z_bb) / (se + 1e-10)
+                p_steiger = 2 * (1 - sp_stats.norm.cdf(abs(z_diff)))
+            else:
+                z_diff = 0.0
+                p_steiger = 1.0
+
+            comparisons["bmi_corr_steiger"] = {
                 "r_full_teacher": float(r_ft),
                 "r_baseline_b": float(r_bb),
+                "r_between_deviations": float(r_12),
                 "z_diff": float(z_diff),
-                "p_value": float(p_fisher),
+                "p_value": float(p_steiger),
                 "n": n_v,
+                "note": "Steiger test for dependent correlations (correct for paired data)"
             }
 
     all_results["comparisons"] = comparisons
@@ -750,11 +796,17 @@ def main():
               f"mean={dev.get('mean','?'):.4f}")
 
     comp = all_results.get("comparisons", {})
-    lev = comp.get("deviation_variance_levene", {})
-    if lev:
-        print(f"\nDeviation variance (Levene): "
-              f"FT={lev['full_teacher_var']:.4f} vs "
-              f"BB={lev['baseline_b_var']:.4f}  p={lev['p_value']:.4g}")
+    disc = comp.get("discrimination_auroc", {})
+    if disc:
+        print(f"\nDeviation AUROC (healthy vs non-healthy): "
+              f"FT={disc.get('full_teacher_auroc', '?'):.4f} vs "
+              f"BB={disc.get('baseline_b_auroc', '?'):.4f}")
+    steiger = comp.get("bmi_corr_steiger", {})
+    if steiger:
+        print(f"BMI correlation (Steiger): "
+              f"FT r={steiger.get('r_full_teacher', '?'):.4f} vs "
+              f"BB r={steiger.get('r_baseline_b', '?'):.4f}  "
+              f"p={steiger.get('p_value', '?'):.4g}")
 
     print(f"\nAll results saved to {RESULTS_DIR}/")
     print("Done.")

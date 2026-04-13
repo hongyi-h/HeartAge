@@ -147,16 +147,69 @@ def main():
     }
     df.rename(columns=rename_map, inplace=True)
 
-    # Cast types to save RAM
+    # --- Robust type conversion ---
+    # R factors → pandas Categorical with string labels (e.g. "Male"/"Female").
+    # pd.to_numeric("Male", errors="coerce") → NaN, which would kill all rows.
+    # Fix: decode known string factors first, then generic numeric conversion.
+
+    # Known string-label factor mappings (UKB R export conventions)
+    _FACTOR_MAPS = {
+        "sex": {"Female": 0, "female": 0, "0": 0,
+                "Male": 1, "male": 1, "1": 1},
+        "smoking": {"Never": 0, "Previous": 1, "Current": 2,
+                    "Prefer not to answer": float("nan"),
+                    "0": 0, "1": 1, "2": 2, "-3": float("nan")},
+    }
+
+    def _decode_factor(series: pd.Series, col_name: str) -> pd.Series:
+        """Map known R factor labels to numeric values."""
+        fmap = _FACTOR_MAPS.get(col_name)
+        if fmap is None:
+            return series
+        # Convert to string for mapping (handles Categorical + object)
+        str_vals = series.astype(str)
+        unique_str = str_vals.unique()[:10]
+        mapped = str_vals.map(fmap)
+        n_mapped = mapped.notna().sum()
+        n_total = len(series)
+        print(f"    factor decode '{col_name}': "
+              f"mapped {n_mapped}/{n_total}, "
+              f"unique_str={list(unique_str)}")
+        return mapped
+
+    def safe_to_float32(series: pd.Series) -> pd.Series:
+        """Convert any series to float32, handling R factors/categoricals."""
+        if hasattr(series, "cat"):
+            codes = series.cat.codes
+            cats = series.cat.categories
+            # If categories are already numeric-like, use them directly
+            numeric_cats = pd.to_numeric(cats, errors="coerce")
+            if numeric_cats.notna().all():
+                result = numeric_cats[codes]
+                result[codes == -1] = float("nan")
+                return result.astype("float32")
+        return pd.to_numeric(series, errors="coerce").astype("float32")
+
+    # Decode known factors BEFORE generic numeric conversion
+    for col_name in ["sex", "smoking", "vigorous_activity"]:
+        if col_name in df.columns:
+            df[col_name] = _decode_factor(df[col_name], col_name)
+
     for col in ALL_IDP_FIELDS + ["age", "bmi"]:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+            df[col] = safe_to_float32(df[col])
     for col in ["sex", "smoking", "vigorous_activity"]:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = safe_to_float32(df[col])
 
-    # Drop participants missing any of the 27 IDPs or age or sex
+    # --- Diagnostic: show non-null counts before dropna ---
     required = ALL_IDP_FIELDS + ["age", "sex"]
+    print("  Non-null counts for required columns:")
+    for col in required:
+        nn = df[col].notna().sum()
+        dtype = df[col].dtype
+        print(f"    {col:20s}  dtype={str(dtype):10s}  non-null={nn}")
+
     n_before = len(df)
     df.dropna(subset=required, inplace=True)
     print(f"  Dropped {n_before - len(df)} rows with missing IDP/age/sex "
