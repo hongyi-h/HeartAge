@@ -835,7 +835,9 @@ def main():
                         help="Skip R23 (direct-outcome student)")
     parser.add_argument("--skip_ptbxl", action="store_true",
                         help="Skip PTB-XL concept supervision for R20")
-    # DeepSpeed adds its own args (--local_rank, etc.)
+    parser.add_argument("--local_rank", type=int, default=-1,
+                        help="Local rank passed by DeepSpeed launcher")
+    # DeepSpeed adds its own args (--deepspeed, --deepspeed_config, etc.)
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
