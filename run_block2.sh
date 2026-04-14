@@ -39,7 +39,7 @@ if [ -n "${MASTER_PORT:-}" ]; then
 fi
 
 deepspeed ${DS_ARGS} \
-    -m src.block2.train_and_evaluate \
+    --module src.block2.train_and_evaluate \
     --deepspeed_config src/block2/ds_config.json
 
 echo ""
