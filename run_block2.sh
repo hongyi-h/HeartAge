@@ -21,7 +21,7 @@ cd "$(dirname "$0")"
 NUM_GPUS="${1:-$(python -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 1)}"
 
 echo "==== Step 1: Prepare data (PTB-XL + UKB paired) ===="
-python -m src.block2.prepare_data
+# python -m src.block2.prepare_data
 
 echo ""
 echo "==== Step 2: Train + Evaluate all student variants (DeepSpeed, ${NUM_GPUS} GPUs) ===="
