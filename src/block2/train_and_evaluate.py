@@ -250,12 +250,11 @@ def train_full_student(ukb, ptbxl, device, cfg, args):
 
     param_groups = _make_ds_param_groups(model, cfg)
 
-    # DeepSpeed initialize
+    # DeepSpeed initialize (config comes from args.deepspeed_config)
     model_engine, optimizer, _, _ = deepspeed.initialize(
         args=args,
         model=model,
         model_parameters=param_groups,
-        config=str(DS_CONFIG_PATH),
     )
     device = model_engine.local_rank
     device = torch.device("cuda", device) if torch.cuda.is_available() \
@@ -418,12 +417,11 @@ def train_simple_student(model, ukb, device, cfg, target_key,
 
     param_groups = _make_ds_param_groups(model, cfg)
 
-    # DeepSpeed initialize
+    # DeepSpeed initialize (config comes from args.deepspeed_config)
     model_engine, optimizer, _, _ = deepspeed.initialize(
         args=args,
         model=model,
         model_parameters=param_groups,
-        config=str(DS_CONFIG_PATH),
     )
     device = torch.device("cuda", model_engine.local_rank) \
         if torch.cuda.is_available() else torch.device("cpu")
