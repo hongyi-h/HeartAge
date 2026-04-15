@@ -26,6 +26,11 @@ from src.block2.config import (
 )
 
 # ---------------------------------------------------------------------------
+# Cache directory (populated by cache_pretrain_data.py)
+# ---------------------------------------------------------------------------
+CACHE_DIR = PROJECT_ROOT / "data" / "processed" / "ecg_cache"
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -190,8 +195,34 @@ class MIMICECGDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# Cached dataset (fast: numpy mmap, no per-sample I/O)
+# ---------------------------------------------------------------------------
+
+class CachedECGDataset(Dataset):
+    """Read pre-cached .npy file via memory mapping — near-zero I/O latency."""
+
+    def __init__(self, path: Path):
+        self.data = np.load(str(path), mmap_mode="r")  # (N, 12, 5000) float16
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.data[idx].astype(np.float32))
+
+
+# ---------------------------------------------------------------------------
 # Combined dataset
 # ---------------------------------------------------------------------------
+
+_CACHE_MAP = {
+    "ptbxl": ("PTB-XL", PTBXLDataset, {}),
+    "sph": ("SPH", SPHDataset, {}),
+    "code15": ("CODE-15%", CODE15Dataset, {}),
+    "arrhythmia": ("ECG-Arrhythmia", ECGArrhythmiaDataset, {}),
+    "mimic": ("MIMIC-IV-ECG", MIMICECGDataset, {}),
+}
+
 
 def build_pretrain_dataset(
     use_ptbxl: bool = True,
@@ -201,52 +232,48 @@ def build_pretrain_dataset(
     use_mimic: bool = True,
     mimic_max: Optional[int] = None,
 ) -> ConcatDataset:
-    """Build a ConcatDataset from all available ECG sources."""
+    """Build a ConcatDataset from all available ECG sources.
+
+    Uses pre-cached .npy files if available (run cache_pretrain_data.py first).
+    Falls back to lazy per-file loading otherwise.
+    """
+    flags = {
+        "ptbxl": use_ptbxl, "sph": use_sph, "code15": use_code15,
+        "arrhythmia": use_arrhythmia, "mimic": use_mimic,
+    }
+
     datasets = []
     names = []
+    cached_count = 0
 
-    if use_ptbxl:
-        try:
-            ds = PTBXLDataset()
-            datasets.append(ds)
-            names.append(f"PTB-XL: {len(ds)}")
-        except FileNotFoundError as e:
-            print(f"  [SKIP] PTB-XL: {e}")
+    for key, (display_name, LazyClass, kwargs) in _CACHE_MAP.items():
+        if not flags[key]:
+            continue
 
-    if use_sph:
-        try:
-            ds = SPHDataset()
+        cache_path = CACHE_DIR / f"{key}.npy"
+        if cache_path.exists():
+            ds = CachedECGDataset(cache_path)
             datasets.append(ds)
-            names.append(f"SPH: {len(ds)}")
-        except FileNotFoundError as e:
-            print(f"  [SKIP] SPH: {e}")
-
-    if use_code15:
-        try:
-            ds = CODE15Dataset()
-            datasets.append(ds)
-            names.append(f"CODE-15%: {len(ds)}")
-        except FileNotFoundError as e:
-            print(f"  [SKIP] CODE-15%: {e}")
-
-    if use_arrhythmia:
-        try:
-            ds = ECGArrhythmiaDataset()
-            datasets.append(ds)
-            names.append(f"ECG-Arrhythmia: {len(ds)}")
-        except FileNotFoundError as e:
-            print(f"  [SKIP] ECG-Arrhythmia: {e}")
-
-    if use_mimic:
-        try:
-            ds = MIMICECGDataset(max_records=mimic_max)
-            datasets.append(ds)
-            names.append(f"MIMIC-IV-ECG: {len(ds)}")
-        except FileNotFoundError as e:
-            print(f"  [SKIP] MIMIC-IV-ECG: {e}")
+            names.append(f"{display_name}: {len(ds)} [cached]")
+            cached_count += 1
+        else:
+            try:
+                kw = dict(kwargs)
+                if key == "mimic" and mimic_max:
+                    kw["max_records"] = mimic_max
+                ds = LazyClass(**kw)
+                datasets.append(ds)
+                names.append(f"{display_name}: {len(ds)} [lazy]")
+            except FileNotFoundError as e:
+                print(f"  [SKIP] {display_name}: {e}")
 
     if not datasets:
         raise RuntimeError("No ECG datasets found for pretraining.")
+
+    total_active = len(datasets)
+    if cached_count < total_active:
+        print(f"  WARNING: {total_active - cached_count} dataset(s) using "
+              f"slow lazy loading. Run: python -m src.block2.cache_pretrain_data")
 
     print(f"Pretrain datasets loaded:")
     for n in names:

@@ -12,6 +12,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# --- Step 0: Cache datasets (one-time, skips if already done) ---
+echo "==== Checking/building ECG data cache ===="
+python -m src.block2.cache_pretrain_data
+echo ""
+
 NUM_GPUS="${1:-$(python -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 1)}"
 
 echo "==== ECG MAE Pretraining (${NUM_GPUS} GPUs) ===="

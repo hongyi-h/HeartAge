@@ -28,6 +28,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 import deepspeed
+import wandb
 
 from src.block2.config import (
     PROJECT_ROOT, ENCODER_CFG, ECG_N_LEADS, ECG_SEQ_LEN, ECG_SAMPLE_RATE,
@@ -250,6 +251,14 @@ def train_mae(args):
     device = torch.device("cuda", local_rank) if torch.cuda.is_available() \
         else torch.device("cpu")
 
+    # wandb
+    if _is_main_rank():
+        wandb.init(
+            project="heartage-ecg-pretrain",
+            config={**cfg, **dict(ENCODER_CFG)},
+            name=f"mae-{time.strftime('%m%d-%H%M')}",
+        )
+
     # Build dataset
     _print_rank0("Loading pretrain datasets …")
     full_dataset = build_pretrain_dataset()
@@ -267,14 +276,14 @@ def train_mae(args):
     train_sampler = DistributedSampler(train_ds, shuffle=True)
     train_loader = DataLoader(
         train_ds, batch_size=cfg["batch_size"],
-        sampler=train_sampler, num_workers=4, pin_memory=True,
+        sampler=train_sampler, num_workers=8, pin_memory=True,
         drop_last=True, persistent_workers=True,
     )
 
     # Val loader (no distributed — run on all ranks but only log on rank 0)
     val_loader = DataLoader(
         val_ds, batch_size=cfg["batch_size"],
-        shuffle=False, num_workers=2, pin_memory=True,
+        shuffle=False, num_workers=4, pin_memory=True,
         drop_last=False,
     )
 
@@ -299,6 +308,7 @@ def train_mae(args):
     patience_counter = 0
     best_encoder_state = None
     history = {"train_loss": [], "val_loss": [], "lr": []}
+    global_step = 0
 
     for epoch in range(cfg["max_epochs"]):
         t0 = time.time()
@@ -320,8 +330,13 @@ def train_mae(args):
             model_engine.backward(loss)
             model_engine.step()
 
-            total_loss += loss.item()
+            loss_val = loss.item()
+            total_loss += loss_val
             n_batches += 1
+            global_step += 1
+
+            if _is_main_rank() and global_step % 50 == 0:
+                wandb.log({"train/batch_loss": loss_val, "step": global_step})
 
         avg_train_loss = total_loss / max(n_batches, 1)
 
@@ -358,6 +373,15 @@ def train_mae(args):
             f"time={elapsed:.1f}s"
         )
 
+        if _is_main_rank():
+            wandb.log({
+                "train/epoch_loss": avg_train_loss,
+                "val/epoch_loss": avg_val_loss,
+                "lr": current_lr,
+                "epoch": epoch + 1,
+                "epoch_time_s": elapsed,
+            }, step=global_step)
+
         # Early stopping
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
@@ -391,6 +415,8 @@ def train_mae(args):
             json.dump(history, f, indent=2)
 
     # Cleanup
+    if _is_main_rank():
+        wandb.finish()
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
