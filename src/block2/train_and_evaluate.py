@@ -47,6 +47,7 @@ from src.block2.models import (
     FullStudent, NoBnStudent, ChronoStudent, DirectOutcomeStudent,
     loss_distill, loss_rank_ecg, loss_concept_mse, loss_concept_bce,
     compute_remodeling_burden, compute_perturbation_index,
+    load_pretrained_encoder,
 )
 
 DS_CONFIG_PATH = Path(__file__).parent / "ds_config.json"
@@ -246,6 +247,10 @@ def train_full_student(ukb, ptbxl, device, cfg, args):
     _print_rank0("=" * 60)
 
     model = FullStudent()
+    if load_pretrained_encoder(model):
+        _print_rank0("  Loaded MAE-pretrained encoder weights")
+    else:
+        _print_rank0("  No pretrained encoder found — training from scratch")
     _print_rank0(f"  Parameters: {_count_params(model):,}")
 
     param_groups = _make_ds_param_groups(model, cfg)
@@ -901,6 +906,7 @@ def main():
     # R21: Chrono-age Student
     # ================================================================
     model_r21 = ChronoStudent()
+    load_pretrained_encoder(model_r21)
     model_r21, hist_r21 = train_simple_student(
         model_r21, ukb, device, cfg,
         target_key="chrono_age",
@@ -923,6 +929,7 @@ def main():
     # R22: No-Bottleneck Student
     # ================================================================
     model_r22 = NoBnStudent()
+    load_pretrained_encoder(model_r22)
     model_r22, hist_r22 = train_simple_student(
         model_r22, ukb, device, cfg,
         target_key="structural_age",
@@ -949,6 +956,7 @@ def main():
         ukb["hf_label"] = torch.from_numpy(hf_labels)
 
         model_r23 = DirectOutcomeStudent()
+        load_pretrained_encoder(model_r23)
         model_r23, hist_r23 = train_simple_student(
             model_r23, ukb, device, cfg,
             target_key="hf_label",

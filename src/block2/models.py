@@ -13,6 +13,8 @@ Derived scores (not trained):
   - remodeling_burden, perturbation_index, scope_uncertainty
 """
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +23,33 @@ from src.block2.config import (
     ENCODER_CFG, STUDENT_CFG, N_CONCEPTS,
     STRUCTURAL_CONCEPT_IDX, RHYTHM_CONCEPT_IDX, QUALITY_CONCEPT_IDX,
     PERTURBATION_WEIGHTS, SCOPE_WEIGHTS,
+    PROJECT_ROOT,
 )
+
+# Path to pretrained encoder checkpoint (from MAE pretraining)
+PRETRAIN_CKPT = PROJECT_ROOT / "results" / "block2" / "pretrain" / "encoder_pretrained.pt"
+
+
+def load_pretrained_encoder(model: nn.Module, ckpt_path: Path = None) -> bool:
+    """Load MAE-pretrained weights into a student model's encoder.
+
+    Looks for `model.encoder` attribute and loads matching keys.
+    Returns True if weights were loaded, False if checkpoint not found.
+    """
+    ckpt_path = ckpt_path or PRETRAIN_CKPT
+    if not ckpt_path.exists():
+        return False
+    if not hasattr(model, "encoder"):
+        return False
+
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = ckpt["encoder_state_dict"]
+    missing, unexpected = model.encoder.load_state_dict(state, strict=False)
+    if missing:
+        print(f"  [WARN] Pretrained encoder missing keys: {missing}")
+    if unexpected:
+        print(f"  [WARN] Pretrained encoder unexpected keys: {unexpected}")
+    return True
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@
 #
 # Prerequisites:
 #   - Block 1 complete (results/block1/ exists)
+#   - ECG encoder pretrained: bash run_pretrain_ecg.sh (recommended)
 #   - Data prepared: python -m src.block2.prepare_data
 #   - pip install deepspeed
 set -euo pipefail
