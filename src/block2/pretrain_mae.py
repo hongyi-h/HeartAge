@@ -183,15 +183,21 @@ class ECGMAE(nn.Module):
 
         Returns:
             reconstruction: (B, 12, 5000) predicted ECG
-            loss: scalar MSE on masked positions
+            loss: scalar MSE on masked positions (computed in FP32)
         """
-        # Match input dtype to model weights (FP16 under DeepSpeed)
+        # Match input dtype to model weights (BF16 under DeepSpeed)
         dtype = next(self.encoder.parameters()).dtype
         ecg = ecg.to(dtype)
         mask = mask.to(dtype)
 
+        # Per-sample normalisation: zero-mean, unit-std per ECG
+        # Keeps different datasets on the same scale
+        ecg_mean = ecg.mean(dim=-1, keepdim=True)  # (B, 12, 1)
+        ecg_std = ecg.std(dim=-1, keepdim=True).clamp(min=1e-6)
+        ecg_normed = (ecg - ecg_mean) / ecg_std
+
         # Apply mask to input
-        masked_input = ecg * mask
+        masked_input = ecg_normed * mask
 
         # Forward through encoder (we discard the embedding, keep feature map)
         _ = self.encoder(masked_input)
@@ -200,10 +206,12 @@ class ECGMAE(nn.Module):
         # Decode
         reconstruction = self.decoder(feature_map)
 
-        # Loss: MSE only on masked positions
-        inv_mask = 1.0 - mask  # 1 where masked
-        n_masked = inv_mask.sum().clamp(min=1.0)
-        loss = ((reconstruction - ecg) ** 2 * inv_mask).sum() / n_masked
+        # Loss in FP32 for numerical accuracy
+        recon_f32 = reconstruction.float()
+        target_f32 = ecg_normed.float()
+        inv_mask_f32 = (1.0 - mask).float()  # 1 where masked
+        n_masked = inv_mask_f32.sum().clamp(min=1.0)
+        loss = ((recon_f32 - target_f32) ** 2 * inv_mask_f32).sum() / n_masked
 
         return reconstruction, loss
 

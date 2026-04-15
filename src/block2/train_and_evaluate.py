@@ -92,7 +92,7 @@ def _get_amp_context(device: torch.device):
     Note: Only used during inference. DeepSpeed handles AMP during training.
     """
     if device.type == "cuda":
-        return torch.amp.autocast("cuda", dtype=torch.float16)
+        return torch.amp.autocast("cuda", dtype=torch.bfloat16)
     return torch.amp.autocast("cpu", enabled=False)
 
 

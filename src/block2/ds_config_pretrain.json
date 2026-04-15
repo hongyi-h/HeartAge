@@ -2,11 +2,8 @@
     "train_micro_batch_size_per_gpu": 64,
     "gradient_accumulation_steps": 1,
     "gradient_clipping": 5.0,
-    "fp16": {
-        "enabled": true,
-        "loss_scale": 0,
-        "loss_scale_window": 1000,
-        "initial_scale_power": 16
+    "bf16": {
+        "enabled": true
     },
     "zero_optimization": {
         "stage": 1,
