@@ -184,6 +184,11 @@ class ECGMAE(nn.Module):
             reconstruction: (B, 12, 5000) predicted ECG
             loss: scalar MSE on masked positions
         """
+        # Match input dtype to model weights (FP16 under DeepSpeed)
+        dtype = next(self.encoder.parameters()).dtype
+        ecg = ecg.to(dtype)
+        mask = mask.to(dtype)
+
         # Apply mask to input
         masked_input = ecg * mask
 
