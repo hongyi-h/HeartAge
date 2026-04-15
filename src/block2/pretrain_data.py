@@ -148,8 +148,11 @@ class ECGArrhythmiaDataset(Dataset):
     def __getitem__(self, idx):
         import wfdb
         rec_path = self.hea_files[idx].replace(".hea", "")
-        record = wfdb.rdrecord(rec_path)
-        ecg = record.p_signal.T.astype(np.float32)  # (12, T)
+        try:
+            record = wfdb.rdrecord(rec_path)
+            ecg = record.p_signal.T.astype(np.float32)  # (12, T)
+        except Exception:
+            ecg = np.zeros((ECG_N_LEADS, ECG_SEQ_LEN), dtype=np.float32)
         ecg = _pad_or_truncate(ecg)
         ecg = _normalise_leads(ecg)
         return torch.from_numpy(ecg)
