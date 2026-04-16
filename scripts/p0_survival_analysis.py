@@ -494,10 +494,20 @@ def fit_cox_model(df: pd.DataFrame, time_col: str, event_col: str,
             if sigma > 1e-8:
                 sub[col] = (sub[col] - mu) / sigma
 
-    cph = CoxPHFitter()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        cph.fit(sub, duration_col=time_col, event_col=event_col)
+    # Penalizer prevents convergence failure with collinear/sparse data
+    cph = CoxPHFitter(penalizer=0.01)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cph.fit(sub, duration_col=time_col, event_col=event_col)
+    except Exception as e:
+        print(f"\n  [{label}]  CONVERGENCE FAILED: {e}")
+        return {
+            "label": label, "n": len(sub),
+            "n_events": int(sub[event_col].sum()),
+            "c_index": float("nan"), "covariates": {},
+            "error": str(e),
+        }
 
     # C-index
     c_idx = concordance_index(
@@ -536,10 +546,6 @@ def run_analysis(df: pd.DataFrame) -> dict:
     """Run all Cox models and comparisons."""
     results = {"models": []}
 
-    print("\n" + "=" * 70)
-    print("A. UNIVARIATE COX MODELS (single predictor)")
-    print("=" * 70)
-
     # Univariate models
     predictors = {
         "FT_deviation": "ft_deviation",
@@ -548,6 +554,46 @@ def run_analysis(df: pd.DataFrame) -> dict:
         "XGB_age_gap": "xgb_age_gap",
         "EN_age_gap": "en_age_gap",
     }
+
+    # --- RAW PREDICTOR DIAGNOSTICS (before any modelling) ---
+    print("\n" + "=" * 70)
+    print("PREDICTOR DIAGNOSTICS: events vs non-events (raw, unstandardised)")
+    print("=" * 70)
+    ev_mask = df["event"] == 1
+    diagnostics = {}
+    for name, col in predictors.items():
+        if col in df.columns:
+            vals_ev = df.loc[ev_mask, col].dropna()
+            vals_nev = df.loc[~ev_mask, col].dropna()
+            d = {
+                "events_mean": float(vals_ev.mean()),
+                "events_median": float(vals_ev.median()),
+                "events_std": float(vals_ev.std()),
+                "non_events_mean": float(vals_nev.mean()),
+                "non_events_median": float(vals_nev.median()),
+                "non_events_std": float(vals_nev.std()),
+                "diff_mean": float(vals_ev.mean() - vals_nev.mean()),
+            }
+            diagnostics[name] = d
+            direction = "↑" if d["diff_mean"] > 0 else "↓"
+            print(f"  {name:20s}  events: {d['events_mean']:+.3f}±{d['events_std']:.3f}  "
+                  f"non-events: {d['non_events_mean']:+.3f}±{d['non_events_std']:.3f}  "
+                  f"diff: {d['diff_mean']:+.3f} {direction}")
+    # Also check domain scores
+    domain_cols = [c for c in df.columns if c.startswith("domain_")]
+    for col in domain_cols:
+        vals_ev = df.loc[ev_mask, col].dropna()
+        vals_nev = df.loc[~ev_mask, col].dropna()
+        diff = float(vals_ev.mean() - vals_nev.mean())
+        direction = "↑" if diff > 0 else "↓"
+        print(f"  {col:20s}  events: {vals_ev.mean():+.3f}±{vals_ev.std():.3f}  "
+              f"non-events: {vals_nev.mean():+.3f}±{vals_nev.std():.3f}  "
+              f"diff: {diff:+.3f} {direction}")
+    results["predictor_diagnostics"] = diagnostics
+
+    print("\n" + "=" * 70)
+    print("A. UNIVARIATE COX MODELS (single predictor)")
+    print("=" * 70)
 
     for name, col in predictors.items():
         if col in df.columns:
