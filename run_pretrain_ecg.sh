@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# ECG Encoder Pretraining (MAE + DeepSpeed)
+# ECG Encoder Pretraining (SparK1D + DeepSpeed)
 # Run from project root: bash run_pretrain_ecg.sh [NUM_GPUS]
+#
+# Method: SparK1D — Sparse and Hierarchical Masked Modeling for 1D CNNs
+#   - Sparse convolutions prevent information leakage from masked to unmasked
+#   - Hierarchical UNet decoder uses multi-scale encoder features
+#   - 60% mask ratio (optimal for CNN per ConvNeXt V2 / SparK findings)
 #
 # Prerequisites:
 #   - ECG datasets in data/ (PTB-XL, SPH, CODE-15%, ECG-Arrhythmia, MIMIC-IV-ECG)
-#   - pip install deepspeed wfdb h5py scipy
+#   - pip install deepspeed wfdb h5py scipy wandb
 #
 # Output:
 #   - results/block2/pretrain/encoder_pretrained.pt
@@ -19,8 +24,9 @@ echo ""
 
 NUM_GPUS="${1:-$(python -c 'import torch; print(torch.cuda.device_count())' 2>/dev/null || echo 1)}"
 
-echo "==== ECG MAE Pretraining (${NUM_GPUS} GPUs) ===="
+echo "==== SparK1D ECG Pretraining (${NUM_GPUS} GPUs) ===="
 echo "Datasets: PTB-XL, SPH, CODE-15%, ECG-Arrhythmia, MIMIC-IV-ECG"
+echo "Method: SparK1D (mask_ratio=0.60, input_size=4992)"
 echo ""
 
 DS_ARGS="--num_gpus=${NUM_GPUS}"
@@ -39,7 +45,7 @@ deepspeed ${DS_ARGS} \
     --deepspeed_config src/block2/ds_config_pretrain.json
 
 echo ""
-echo "==== Pretraining complete ===="
+echo "==== SparK1D pretraining complete ===="
 echo "Encoder checkpoint: results/block2/pretrain/encoder_pretrained.pt"
 echo ""
 echo "Next: bash run_block2.sh"

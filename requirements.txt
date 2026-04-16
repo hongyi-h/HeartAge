@@ -12,3 +12,4 @@ xgboost>=2.0
 wfdb>=4.0
 deepspeed>=0.14
 wandb>=0.16
+lifelines>=0.29

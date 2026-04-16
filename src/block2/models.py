@@ -127,26 +127,48 @@ class ResNet1DEncoder(nn.Module):
 
         # Residual blocks with progressive downsampling
         blocks = []
+        self._feature_channels = []
         ch = base_filters
         for i in range(n_blocks):
             next_ch = ch * 2 if i > 0 else ch
-            if next_ch != ch:
-                blocks.append(DownsampleBlock(ch, next_ch, kernel_size,
-                                              stride, dropout))
-            else:
-                blocks.append(DownsampleBlock(ch, next_ch, kernel_size,
-                                              stride, dropout))
+            blocks.append(DownsampleBlock(ch, next_ch, kernel_size,
+                                          stride, dropout))
             blocks.append(ResBlock1D(next_ch, kernel_size, dropout))
+            self._feature_channels.append(next_ch)
             ch = next_ch
         self.blocks = nn.Sequential(*blocks)
+        self._n_blocks = n_blocks
 
         # Global average pooling + projection
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.proj = nn.Linear(ch, embedding_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (B, 12, 5000) → (B, embedding_dim)"""
+    # --- SparK interface ---------------------------------------------------
+
+    def get_downsample_ratio(self) -> int:
+        """Total spatial downsample: stem (2×) + n_blocks stages (each 2×)."""
+        return 2 ** (self._n_blocks + 1)
+
+    def get_feature_map_channels(self):
+        """Channel count after each stage, e.g. [64, 128, 256, 512]."""
+        return list(self._feature_channels)
+
+    def forward(self, x: torch.Tensor, hierarchical: bool = False):
+        """x: (B, 12, L) → (B, embedding_dim) or list of feature maps.
+
+        Args:
+            hierarchical: if True, return a list of feature maps after each
+                stage (for SparK pretraining). If False, return the pooled
+                embedding (for downstream inference).
+        """
         out = self.stem(x)
+        if hierarchical:
+            feats = []
+            for i in range(0, len(self.blocks), 2):
+                out = self.blocks[i](out)      # DownsampleBlock
+                out = self.blocks[i + 1](out)  # ResBlock1D
+                feats.append(out)
+            return feats
         out = self.blocks(out)
         out = self.pool(out).squeeze(-1)
         return self.proj(out)
