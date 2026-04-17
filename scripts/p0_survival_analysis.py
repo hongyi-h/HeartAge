@@ -787,6 +787,67 @@ def main():
                        "km_bb_age_gap_tertile.png")
     plot_forest(results, "forest_plot_adjusted.png")
 
+    # ------------------------------------------------------------------
+    # SENSITIVITY A: Exclude events within 2 years of CMR
+    # (reverse-causation / sub-clinical HF check)
+    # ------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("SENSITIVITY A: Excluding events within 2 years of CMR")
+    print("=" * 70)
+
+    df_sens_a = df.copy()
+    early_events = (df_sens_a["event"] == 1) & (df_sens_a["follow_up_years"] < 2.0)
+    n_early = int(early_events.sum())
+    # Re-censor: early events become non-events, keep their follow-up time
+    df_sens_a.loc[early_events, "event"] = 0
+    n_remaining_events = int(df_sens_a["event"].sum())
+    print(f"  Excluded {n_early} events within 2 years of CMR")
+    print(f"  Remaining events: {n_remaining_events} / {len(df_sens_a)}")
+
+    base_covs_a = ["age", "sex"]
+    if df_sens_a["bmi"].notna().mean() > 0.8:
+        base_covs_a.append("bmi")
+
+    sens_a_models = []
+    for name, col in [("FT_deviation", "ft_deviation"),
+                      ("BB_age_gap", "bb_age_gap"),
+                      ("XGB_age_gap", "xgb_age_gap")]:
+        if col in df_sens_a.columns:
+            r = fit_cox_model(df_sens_a, "follow_up_years", "event",
+                              [col] + base_covs_a,
+                              f"SensA (>2yr): {name}")
+            sens_a_models.append(r)
+    results["sensitivity_a_exclude_2yr"] = sens_a_models
+
+    # ------------------------------------------------------------------
+    # SENSITIVITY B: |age_gap| (absolute value) — direction-agnostic
+    # Tests whether the magnitude of age-gap matters once direction is removed
+    # ------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("SENSITIVITY B: |age_gap| (absolute value, direction-agnostic)")
+    print("=" * 70)
+
+    df_sens_b = df.copy()
+    sens_b_models = []
+    for name, col in [("FT_age_gap", "ft_age_gap"),
+                      ("BB_age_gap", "bb_age_gap"),
+                      ("XGB_age_gap", "xgb_age_gap")]:
+        if col in df_sens_b.columns:
+            abs_col = f"abs_{col}"
+            df_sens_b[abs_col] = df_sens_b[col].abs()
+            r = fit_cox_model(df_sens_b, "follow_up_years", "event",
+                              [abs_col] + base_covs_a,
+                              f"SensB |{name}|")
+            sens_b_models.append(r)
+
+    # Also compare: FT_deviation vs |ft_age_gap|
+    if "abs_ft_age_gap" in df_sens_b.columns and "ft_deviation" in df_sens_b.columns:
+        r = fit_cox_model(df_sens_b, "follow_up_years", "event",
+                          ["ft_deviation", "abs_ft_age_gap"] + base_covs_a,
+                          "SensB joint: FT_dev + |FT_gap|")
+        sens_b_models.append(r)
+    results["sensitivity_b_abs_gap"] = sens_b_models
+
     # Gate decision
     print("\n" + "=" * 70)
     print("GATE DECISION")
